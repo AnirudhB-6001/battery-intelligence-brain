@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# OS / Editor
+.DS_Store
+.vscode/
+
+# Data artifacts
+*.db
+*.sqlite
+*.log
