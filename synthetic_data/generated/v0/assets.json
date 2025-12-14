@@ -1,0 +1,30 @@
+{
+  "site": {
+    "asset_id": "site_alpha",
+    "asset_type": "site"
+  },
+  "assets": [
+    {
+      "asset_id": "rack_01",
+      "asset_type": "rack",
+      "parent_asset_id": "site_alpha",
+      "chemistry": "LFP",
+      "install_date": "2024-01-01",
+      "nominal_capacity_kwh": 100.0
+    },
+    {
+      "asset_id": "rack_02",
+      "asset_type": "rack",
+      "parent_asset_id": "site_alpha",
+      "chemistry": "LFP",
+      "install_date": "2024-01-01",
+      "nominal_capacity_kwh": 100.0
+    }
+  ],
+  "notes": {
+    "cadence_minutes": 15,
+    "start_ts": "2025-12-01T00:00:00+00:00",
+    "days": 14,
+    "seed": 42
+  }
+}
