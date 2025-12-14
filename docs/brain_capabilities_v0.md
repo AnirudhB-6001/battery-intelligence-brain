@@ -42,3 +42,6 @@
 - Attach physics model outputs as computations.
 - Attach ML/digital twin outputs as additional data sources.
 - Add an LLM as a narrator ONLY (never as the source of truth).
+
+- Introduce Confidence Engine v1 in Phase 2 to centralize scoring + reasons.
+- Define structured confidence subscores: coverage, missingness, corroboration, stability.
