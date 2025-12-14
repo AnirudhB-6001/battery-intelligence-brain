@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from adapters.telemetry import CsvTelemetryAdapter
 from adapters.telemetry.csv_adapter import TimeWindow
 from evidence import EvidenceBuilder
+from brain.contracts import BrainResponse, Confidence
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -38,8 +40,9 @@ def _filter_numeric(rows: List[Dict[str, Any]], key: str) -> List[Tuple[datetime
 
 def _slope_per_day(points: List[Tuple[datetime, float]]) -> Optional[float]:
     """
-    Very simple slope estimate: (mean(last 10%) - mean(first 10%)) / days_span
-    Stable enough for synthetic v0. Returns units: value per day.
+    Very simple slope estimate:
+    (mean(last 10%) - mean(first 10%)) / days_span
+    Returns units: value per day.
     """
     if len(points) < 20:
         return None
@@ -59,13 +62,6 @@ def _slope_per_day(points: List[Tuple[datetime, float]]) -> Optional[float]:
     return (m2 - m1) / days
 
 
-@dataclass
-class BrainResult:
-    answer: str
-    confidence: Dict[str, Any]
-    evidence: Dict[str, Any]
-
-
 def compare_soh_trend_v0(
     adapter: CsvTelemetryAdapter,
     asset_ids: List[str],
@@ -74,7 +70,7 @@ def compare_soh_trend_v0(
     end_iso: str,
     day7_boundary_iso: str,
     role: str = "asset_manager",
-) -> BrainResult:
+) -> BrainResponse:
     question = f"Which asset is degrading faster between {asset_ids} in the given window?"
     intent = "soh_trend_compare_v0"
     ev = EvidenceBuilder.start(question, intent, role=role)
@@ -82,15 +78,16 @@ def compare_soh_trend_v0(
     tw = TimeWindow.from_iso(start_iso, end_iso)
     boundary = _parse_iso(day7_boundary_iso)
 
-    per_asset = {}
-    gaps_notes = []
+    per_asset: Dict[str, Any] = {}
+    gaps_notes: List[str] = []
+
     for asset_id in asset_ids:
         ts = adapter.get_timeseries(asset_id, ["soh", "temperature"], tw, include_missing=True)
 
-        # record data_used
         rows = ts["rows"]
         missing = sum(1 for r in rows if r.get("data_quality_flag") == "missing")
         quality_notes = f"{missing} missing rows" if missing else "no missing rows"
+
         ev.add_data_used(
             source_type="telemetry",
             source_name=str(adapter.base_dir.name),
@@ -100,7 +97,6 @@ def compare_soh_trend_v0(
             quality_notes=quality_notes,
         )
 
-        # split pre/post boundary
         soh_points = _filter_numeric(rows, "soh")
         pre = [(t, v) for (t, v) in soh_points if t < boundary]
         post = [(t, v) for (t, v) in soh_points if t >= boundary]
@@ -118,27 +114,25 @@ def compare_soh_trend_v0(
         if missing > 0:
             gaps_notes.append(f"{asset_id} has {missing} missing telemetry rows in-window.")
 
-    # Decide “degrading faster” = more negative post slope
-    # If slopes missing, confidence drops.
     def score(a: Dict[str, Any]) -> Optional[float]:
         s = a.get("post_slope_per_day")
         return s if s is not None else None
 
     valid = [(aid, score(per_asset[aid])) for aid in asset_ids if score(per_asset[aid]) is not None]
+
     if not valid:
         ev.add_gap("No valid post-boundary SoH slope could be computed for any asset.")
         answer = "Insufficient data to compare degradation trends (post-boundary slope unavailable)."
-        confidence = {
-            "band": "low",
-            "reasons": ["Missing or insufficient SoH data in the comparison window."],
-            "escalation": "ask_followup",
-        }
-        return BrainResult(answer=answer, confidence=confidence, evidence=ev.finalize())
+        conf = Confidence(
+            band="low",
+            reasons=["Missing or insufficient SoH data in the comparison window."],
+            escalation="ask_followup",
+        )
+        return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data={"per_asset": per_asset})
 
-    # pick most negative slope (fastest decline)
-    worst_asset, worst_slope = sorted(valid, key=lambda x: x[1])[0]
+    # Pick most negative slope = fastest decline
+    worst_asset, _worst_slope = sorted(valid, key=lambda x: x[1])[0]
 
-    # Add computation evidence
     outputs = {"boundary": day7_boundary_iso, "per_asset": per_asset, "winner": worst_asset}
     ev.add_computation(
         name="soh_slope_compare",
@@ -148,37 +142,32 @@ def compare_soh_trend_v0(
         assumptions_refs=["ASSUMP_SOH_IS_VALID_PROXY_V0"],
     )
 
-    # Add KB rule placeholder ref (structure-first)
     ev.add_kb_rule(
         kb_ref="knowledge_base/thresholds/README.md",
         rule_summary="Threshold framework placeholder (v0).",
         impact_on_answer="No threshold enforcement in v0; comparison is relative only.",
     )
 
-    # Confidence (v0): rule-based
-    reasons = []
+    # Confidence (v0)
+    reasons: List[str] = []
     band = "high"
     escalation = "none"
 
-    # Missingness penalty
     any_missing = any(per_asset[aid]["missing_rows"] > 0 for aid in asset_ids)
     if any_missing:
         band = "medium"
         reasons.append("Telemetry contains missing intervals; trend confidence reduced.")
 
-    # Slope robustness penalty
     any_none = any(per_asset[aid]["post_slope_per_day"] is None for aid in asset_ids)
     if any_none:
         band = "medium"
         reasons.append("One or more assets lacked sufficient post-boundary points; comparison limited.")
 
-    # If both missing + slope issues -> low
     if any_missing and any_none:
         band = "low"
         escalation = "ask_followup"
         reasons.append("Data quality issues may bias comparison; consider extending the window.")
 
-    # Record gaps as evidence
     for g in gaps_notes:
         ev.add_gap(g)
 
@@ -187,37 +176,38 @@ def compare_soh_trend_v0(
         f"within {start_iso} → {end_iso}."
     )
 
-    confidence = {
-        "band": band,
-        "reasons": reasons if reasons else ["Sufficient data coverage for a relative comparison in v0."],
-        "escalation": escalation,
+    data = {
+        "comparison_window": {"start": start_iso, "end": end_iso},
+        "boundary": day7_boundary_iso,
+        "per_asset": per_asset,
+        "winner": worst_asset,
     }
 
-    return BrainResult(answer=answer, confidence=confidence, evidence=ev.finalize())
+    conf = Confidence(
+        band=band,
+        reasons=reasons if reasons else ["Sufficient data coverage for a relative comparison in v0."],
+        escalation=escalation,
+    )
+
+    return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data=data)
 
 
-def main():
+def main() -> None:
     adapter = CsvTelemetryAdapter("synthetic_data/generated/v0")
 
-    # Our synthetic world: 14 days from 2025-12-01
     start = "2025-12-01T00:00:00+00:00"
     end = "2025-12-15T00:00:00+00:00"
-    # Boundary: Day 7 from start
     day7 = "2025-12-08T00:00:00+00:00"
 
-    result = compare_soh_trend_v0(adapter, ["rack_01", "rack_02"], start_iso=start, end_iso=end, day7_boundary_iso=day7)
+    resp = compare_soh_trend_v0(
+        adapter,
+        ["rack_01", "rack_02"],
+        start_iso=start,
+        end_iso=end,
+        day7_boundary_iso=day7,
+    )
 
-    print("\n=== ANSWER ===")
-    print(result.answer)
-    print("\n=== CONFIDENCE ===")
-    print(result.confidence)
-    print("\n=== EVIDENCE (truncated) ===")
-    # Print evidence id + high-level keys only to keep output readable
-    ev = result.evidence
-    print({k: ev[k] for k in ["evidence_id", "generated_at", "intent", "role"]})
-    print("data_used:", len(ev.get("data_used", [])))
-    print("computations:", len(ev.get("computations", [])))
-    print("gaps:", ev.get("assumptions_and_gaps", {}).get("gaps", []))
+    print(json.dumps(resp.to_dict(), indent=2))
 
 
 if __name__ == "__main__":
