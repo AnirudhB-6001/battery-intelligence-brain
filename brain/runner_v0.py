@@ -10,6 +10,8 @@ from adapters.telemetry.csv_adapter import TimeWindow
 from evidence import EvidenceBuilder
 from brain.contracts import BrainResponse, Confidence
 
+from brain.confidence_bridge_v1 import score_confidence_v1
+
 
 def _parse_iso(ts: str) -> datetime:
     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -187,6 +189,15 @@ def compare_soh_trend_v0(
         band=band,
         reasons=reasons if reasons else ["Sufficient data coverage for a relative comparison in v0."],
         escalation=escalation,
+    )
+
+    # Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
+    _engine_conf = score_confidence_v1(
+        missing_rows=sum(per_asset[aid]["missing_rows"] for aid in asset_ids),
+        total_rows=sum(per_asset[aid]["row_count"] for aid in asset_ids),
+        computed_metrics_ok=True,
+        corroboration=None,
+        intent=intent,
     )
 
     return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data=data)

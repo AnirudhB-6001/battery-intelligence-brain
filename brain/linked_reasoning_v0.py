@@ -8,6 +8,8 @@ from brain.runner_v0 import compare_soh_trend_v0
 from brain.anomaly_scan_v0 import anomaly_scan_v0
 from brain.contracts import BrainResponse, Confidence
 
+from brain.confidence_bridge_v1 import score_confidence_v1
+
 
 def linked_degradation_analysis_v0(
     adapter: CsvTelemetryAdapter,
@@ -100,6 +102,16 @@ def linked_degradation_analysis_v0(
     }
 
     conf = Confidence(band=band, reasons=reasons, escalation=escalation)
+    
+    # Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
+    _engine_conf = score_confidence_v1(
+        missing_rows=(degr.data.get("per_asset", {}).get(winner, {}).get("missing_rows")),
+        total_rows=(degr.data.get("per_asset", {}).get(winner, {}).get("row_count")),
+        computed_metrics_ok=True,
+        corroboration=0.7,  # linked reasoning implies multi-source support, but we keep this conservative
+        intent="linked_degradation_v0",
+    )
+
 
     return BrainResponse(
         answer=answer,
