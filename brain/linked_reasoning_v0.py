@@ -103,16 +103,27 @@ def linked_degradation_analysis_v0(
 
     conf = Confidence(band=band, reasons=reasons, escalation=escalation)
     
-    # Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
-    _engine_conf = score_confidence_v1(
+    # Existing v0 reasons/band/escalation computed above:
+    # band, reasons, escalation
+    # Confidence Engine v1 (now active)
+    
+    engine_conf = score_confidence_v1(
         missing_rows=(degr.data.get("per_asset", {}).get(winner, {}).get("missing_rows")),
         total_rows=(degr.data.get("per_asset", {}).get(winner, {}).get("row_count")),
         computed_metrics_ok=True,
-        corroboration=0.7,  # linked reasoning implies multi-source support, but we keep this conservative
+        corroboration=0.7,
         intent="linked_degradation_v0",
-    )
+        )
+    
+    band = engine_conf["band"]
+    escalation = engine_conf["escalation"]
 
+    # Keep the linked reasoning reasons from v0 for now
+    conf = Confidence(band=band, reasons=reasons, escalation=escalation)
 
+    data["confidence_v1"] = engine_conf
+
+    
     return BrainResponse(
         answer=answer,
         confidence=conf,

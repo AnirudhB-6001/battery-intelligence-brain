@@ -8,6 +8,7 @@ from adapters.telemetry import CsvTelemetryAdapter
 from adapters.telemetry.csv_adapter import TimeWindow
 from evidence import EvidenceBuilder
 from brain.contracts import BrainResponse, Confidence
+from brain.confidence_bridge_v1 import score_confidence_v1
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -165,6 +166,40 @@ def anomaly_scan_v0(
         reasons=reasons if reasons else ["Sufficient temperature coverage for anomaly scan in v0."],
         escalation=escalation,
     )
+
+    event_hit = any(e.get("event_type") == "temp_spike" for e in events) if events else False
+    
+    # Existing v0 reasons/band/escalation computed above:
+    # band, reasons, escalation
+    
+    # Confidence Engine v1 (now active)Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
+    
+    engine_conf = score_confidence_v1(
+        missing_rows=missing,
+        total_rows=ts["row_count"],
+        computed_metrics_ok=True,
+        corroboration=0.8 if event_hit else None,
+        intent=intent,
+    )
+
+    band = engine_conf["band"]
+    escalation = engine_conf["escalation"]
+
+    confidence = {
+        "band": band,
+        "reasons": reasons if reasons else ["Sufficient support for anomaly detection in v0."],
+        "escalation": escalation,
+    }
+
+    data["confidence_v1"] = engine_conf
+
+    return BrainResponse(
+        answer=answer,
+        confidence=Confidence(band=band, reasons=confidence["reasons"], escalation=escalation),
+        evidence=ev.finalize(),
+        data=data,
+    )
+    
     return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data=data)
 
 

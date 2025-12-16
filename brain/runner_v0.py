@@ -190,14 +190,41 @@ def compare_soh_trend_v0(
         reasons=reasons if reasons else ["Sufficient data coverage for a relative comparison in v0."],
         escalation=escalation,
     )
+    
+    # Existing v0 reasons/band/escalation computed above:
+    # band, reasons, escalation
 
-    # Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
-    _engine_conf = score_confidence_v1(
+    # Confidence Engine v1 (now active)
+    engine_conf = score_confidence_v1(
         missing_rows=sum(per_asset[aid]["missing_rows"] for aid in asset_ids),
         total_rows=sum(per_asset[aid]["row_count"] for aid in asset_ids),
         computed_metrics_ok=True,
         corroboration=None,
         intent=intent,
+    )
+
+    # Use engine band/escalation, keep human reasons from v0 (less noisy)
+    band = engine_conf["band"]
+    escalation = engine_conf["escalation"]
+
+    confidence = {
+        "band": band,
+        "reasons": reasons if reasons else ["Sufficient support for the conclusion at v0 criteria."],
+        "escalation": escalation,
+    }
+
+    # Ensure data exists and attach confidence_v1
+    data["confidence_v1"] = engine_conf
+
+    return BrainResponse(
+        answer=answer,
+        confidence=Confidence(
+            band=band,
+            reasons=confidence["reasons"],
+            escalation=escalation,
+        ),
+        evidence=ev.finalize(),
+        data=data,
     )
 
     return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data=data)
