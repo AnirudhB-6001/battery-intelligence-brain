@@ -16,6 +16,10 @@ class ConfidenceSignals:
     total_rows: Optional[int] = None
     coverage_ratio: Optional[float] = None  # 0..1 if precomputed
     time_span_days: Optional[float] = None
+    
+    # Gap structure (cluster vs scatter)
+    missing_streak_max: Optional[int] = None   # longest consecutive missing run
+    missing_streaks: Optional[int] = None      # how many missing runs (clusters)
 
     # Computation health
     computed_metrics_ok: Optional[bool] = None

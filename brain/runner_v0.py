@@ -10,7 +10,7 @@ from adapters.telemetry.csv_adapter import TimeWindow
 from evidence import EvidenceBuilder
 from brain.contracts import BrainResponse, Confidence
 
-from brain.confidence_bridge_v1 import score_confidence_v1
+from brain.confidence_bridge_v1 import score_confidence_v1, gap_stats_from_rows
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -83,12 +83,26 @@ def compare_soh_trend_v0(
     per_asset: Dict[str, Any] = {}
     gaps_notes: List[str] = []
 
+    # --- NEW: gap clustering aggregates ---
+    total_missing_rows = 0
+    total_rows = 0
+    missing_streak_max = 0
+    missing_streaks = 0
+
     for asset_id in asset_ids:
         ts = adapter.get_timeseries(asset_id, ["soh", "temperature"], tw, include_missing=True)
 
         rows = ts["rows"]
-        missing = sum(1 for r in rows if r.get("data_quality_flag") == "missing")
+        gap = gap_stats_from_rows(rows)
+
+        missing = gap["missing_rows"]
         quality_notes = f"{missing} missing rows" if missing else "no missing rows"
+
+        # aggregate gap stats (worst-case logic)
+        total_missing_rows += gap["missing_rows"]
+        total_rows += ts["row_count"]
+        missing_streak_max = max(missing_streak_max, gap["missing_streak_max"])
+        missing_streaks += gap["missing_streaks"]
 
         ev.add_data_used(
             source_type="telemetry",
@@ -150,7 +164,7 @@ def compare_soh_trend_v0(
         impact_on_answer="No threshold enforcement in v0; comparison is relative only.",
     )
 
-    # Confidence (v0)
+    # Confidence (v0 reasons only)
     reasons: List[str] = []
     band = "high"
     escalation = "none"
@@ -185,42 +199,27 @@ def compare_soh_trend_v0(
         "winner": worst_asset,
     }
 
-    conf = Confidence(
-        band=band,
-        reasons=reasons if reasons else ["Sufficient data coverage for a relative comparison in v0."],
-        escalation=escalation,
-    )
-    
-    # Existing v0 reasons/band/escalation computed above:
-    # band, reasons, escalation
-
-    # Confidence Engine v1 (now active)
+    # --- Confidence Engine v1 (now with gap clustering signals) ---
     engine_conf = score_confidence_v1(
-        missing_rows=sum(per_asset[aid]["missing_rows"] for aid in asset_ids),
-        total_rows=sum(per_asset[aid]["row_count"] for aid in asset_ids),
+        missing_rows=total_missing_rows,
+        total_rows=total_rows,
+        missing_streak_max=missing_streak_max,
+        missing_streaks=missing_streaks,
         computed_metrics_ok=True,
         corroboration=None,
         intent=intent,
     )
 
-    # Use engine band/escalation, keep human reasons from v0 (less noisy)
     band = engine_conf["band"]
     escalation = engine_conf["escalation"]
 
-    confidence = {
-        "band": band,
-        "reasons": reasons if reasons else ["Sufficient support for the conclusion at v0 criteria."],
-        "escalation": escalation,
-    }
-
-    # Ensure data exists and attach confidence_v1
     data["confidence_v1"] = engine_conf
 
     return BrainResponse(
         answer=answer,
         confidence=Confidence(
             band=band,
-            reasons=confidence["reasons"],
+            reasons=reasons if reasons else ["Sufficient support for the conclusion at v0 criteria."],
             escalation=escalation,
         ),
         evidence=ev.finalize(),

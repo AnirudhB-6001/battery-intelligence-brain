@@ -8,7 +8,7 @@ from adapters.telemetry import CsvTelemetryAdapter
 from adapters.telemetry.csv_adapter import TimeWindow
 from evidence import EvidenceBuilder
 from brain.contracts import BrainResponse, Confidence
-from brain.confidence_bridge_v1 import score_confidence_v1
+from brain.confidence_bridge_v1 import score_confidence_v1, gap_stats_from_rows
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -57,7 +57,10 @@ def anomaly_scan_v0(
     # Pull telemetry
     ts = adapter.get_timeseries(asset_id, ["temperature"], tw, include_missing=True)
     rows = ts["rows"]
-    missing = sum(1 for r in rows if r.get("data_quality_flag") == "missing")
+
+    gap = gap_stats_from_rows(rows)
+    missing = gap["missing_rows"]
+
     quality_notes = f"{missing} missing rows" if missing else "no missing rows"
 
     ev.add_data_used(
@@ -168,15 +171,17 @@ def anomaly_scan_v0(
     )
 
     event_hit = any(e.get("event_type") == "temp_spike" for e in events) if events else False
-    
+
     # Existing v0 reasons/band/escalation computed above:
     # band, reasons, escalation
-    
+
     # Confidence Engine v1 (now active)Confidence Engine v1 (migration-only): compute score but do not change v0 output yet
-    
+
     engine_conf = score_confidence_v1(
         missing_rows=missing,
         total_rows=ts["row_count"],
+        missing_streak_max=gap["missing_streak_max"],
+        missing_streaks=gap["missing_streaks"],
         computed_metrics_ok=True,
         corroboration=0.8 if event_hit else None,
         intent=intent,
@@ -199,7 +204,7 @@ def anomaly_scan_v0(
         evidence=ev.finalize(),
         data=data,
     )
-    
+
     return BrainResponse(answer=answer, confidence=conf, evidence=ev.finalize(), data=data)
 
 

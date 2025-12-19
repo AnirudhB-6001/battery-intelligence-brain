@@ -55,6 +55,30 @@ class ConfidenceEngineV1:
             quality = _clamp(1.0 - miss_ratio * 1.2)  # missing hurts a bit more than linear
             if miss_ratio > 0.0:
                 reasons.append("Telemetry contains missing intervals; confidence reduced.")
+
+            # ----- Gap clustering penalty (Issue 17.1) -----
+            # Continuous missing blocks are riskier than scattered misses.
+            streak_max = signals.missing_streak_max or 0
+            streaks = signals.missing_streaks or 0
+
+            if streak_max > 0:
+                cluster_penalty = 0.0
+
+                # At 15m cadence: 4 = 1h gap; 8 = 2h; 16 = 4h.
+                if streak_max >= 4:
+                    cluster_penalty += 0.05
+                if streak_max >= 8:
+                    cluster_penalty += 0.07
+                if streak_max >= 16:
+                    cluster_penalty += 0.10
+
+                # If gaps are mostly scattered (many streaks, small max), reduce penalty.
+                if streaks >= 3 and streak_max <= 4:
+                    cluster_penalty *= 0.5
+
+                if cluster_penalty > 0.0:
+                    quality = _clamp(quality - cluster_penalty)
+                    reasons.append("Missing telemetry is clustered (continuous gaps); confidence reduced.")
         else:
             quality = 0.6
             reasons.append("Missingness not provided; using neutral default.")
